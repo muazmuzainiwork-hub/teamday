@@ -1,0 +1,11 @@
+import {env} from 'cloudflare:workers';
+import {headers} from 'next/headers';
+const db=()=> (env as any).DB;
+export const emailAddress=(value:string)=>{const email=String(value||'').trim().toLowerCase();if(email.length>254||! /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))throw Error('Enter a valid email address');return email};
+const hex=(v:ArrayBuffer)=>Array.from(new Uint8Array(v)).map(n=>n.toString(16).padStart(2,'0')).join('');
+export async function passwordHash(password:string,salt:string){if(typeof password!=='string'||password.length<8||password.length>128)throw Error('Use a password between 8 and 128 characters');const key=await crypto.subtle.importKey('raw',new TextEncoder().encode(password),'PBKDF2',false,['deriveBits']);return hex(await crypto.subtle.deriveBits({name:'PBKDF2',salt:new TextEncoder().encode(salt),iterations:100000,hash:'SHA-256'},key,256))}
+export async function credentials(email:string,password:string){const salt=crypto.randomUUID();return {email:emailAddress(email),passwordSalt:salt,passwordHash:await passwordHash(password,salt)}}
+export async function tables(){await db().prepare('CREATE TABLE IF NOT EXISTS registrations (id TEXT PRIMARY KEY, email TEXT UNIQUE NOT NULL, name TEXT NOT NULL, passwordHash TEXT NOT NULL, passwordSalt TEXT NOT NULL)').run();await db().prepare('CREATE TABLE IF NOT EXISTS email_sessions (token TEXT PRIMARY KEY, employee TEXT NOT NULL, expires INTEGER NOT NULL)').run();await db().prepare('CREATE TABLE IF NOT EXISTS email_attempts (email TEXT PRIMARY KEY, attempts INTEGER NOT NULL, expires INTEGER NOT NULL)').run()}
+export async function tokenHash(token:string){return hex(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(token)))}
+export async function getAppUser(){await tables();const h=await headers(),token=h.get('cookie')?.match(/(?:^|;\s*)teamday_session=([^;]+)/)?.[1];if(!token)return null;const row=await db().prepare('SELECT employee FROM email_sessions WHERE token=? AND expires>?').bind(await tokenHash(token),Date.now()).first();return row?{employeeId:row.employee}:null}
+export const cookie=(token:string,age=28800)=>`teamday_session=${token}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=${age}`;
